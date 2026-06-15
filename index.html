@@ -113,10 +113,16 @@
         <section class="bottom-section">
           <div class="processes-panel">
             <div class="panel-header">
-              <h3>🔥 资源占用 Top 10 进程</h3>
-              <div class="sort-tabs">
-                <button class="sort-tab active" data-sort="cpu">按 CPU</button>
-                <button class="sort-tab" data-sort="mem">按内存</button>
+              <h3>🌳 进程树视图</h3>
+              <div class="process-toolbar">
+                <div class="search-box">
+                  <span class="search-icon">�</span>
+                  <input type="text" id="processSearch" placeholder="搜索进程名...">
+                </div>
+                <div class="sort-tabs">
+                  <button class="sort-tab active" data-sort="cpu">按 CPU</button>
+                  <button class="sort-tab" data-sort="mem">按内存</button>
+                </div>
               </div>
             </div>
             <div class="process-list" id="processList">
@@ -328,6 +334,21 @@
         <div class="modal-footer">
           <button class="btn btn-secondary" id="btnCancelClean">取消</button>
           <button class="btn btn-danger" id="btnConfirmClean">确认删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-overlay" id="processDetailModal">
+      <div class="modal modal-lg">
+        <div class="modal-header">
+          <h2 id="processDetailTitle">进程详情</h2>
+          <button class="btn-close" id="btnCloseProcessDetail">×</button>
+        </div>
+        <div class="modal-body" id="processDetailBody">
+          <div class="loading">加载中...</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="btnCloseProcessDetail2">关闭</button>
         </div>
       </div>
     </div>

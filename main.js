@@ -86,6 +86,74 @@ function stopMonitoring() {
   }
 }
 
+function buildProcessTree(processes) {
+  const processMap = new Map();
+  const roots = [];
+
+  processes.forEach(p => {
+    const processData = {
+      pid: p.pid,
+      ppid: p.parentPid || 0,
+      name: p.name,
+      cpu: parseFloat(p.cpu.toFixed(2)),
+      mem: parseFloat(p.mem.toFixed(2)),
+      memBytes: Math.round(p.memVsz || p.memRss || 0),
+      threads: p.threads || 0,
+      priority: p.priority || 0,
+      command: p.command || '',
+      params: p.params || '',
+      path: p.path || '',
+      started: p.started || 0,
+      user: p.user || '',
+      state: p.state || '',
+      tty: p.tty || '',
+      nice: p.nice || 0,
+      memRss: p.memRss || 0,
+      memVsz: p.memVsz || 0,
+      children: []
+    };
+    processMap.set(p.pid, processData);
+  });
+
+  processMap.forEach(p => {
+    if (p.ppid && processMap.has(p.ppid)) {
+      processMap.get(p.ppid).children.push(p);
+    } else {
+      roots.push(p);
+    }
+  });
+
+  return roots;
+}
+
+function getProcessDetail(pid, allProcesses) {
+  const p = allProcesses.find(proc => proc.pid === pid);
+  if (!p) return null;
+  
+  return {
+    pid: p.pid,
+    ppid: p.parentPid || 0,
+    name: p.name,
+    cpu: parseFloat(p.cpu.toFixed(2)),
+    mem: parseFloat(p.mem.toFixed(2)),
+    memBytes: Math.round(p.memVsz || p.memRss || 0),
+    memRss: p.memRss || 0,
+    memVsz: p.memVsz || 0,
+    threads: p.threads || 0,
+    priority: p.priority || 0,
+    nice: p.nice || 0,
+    command: p.command || '',
+    params: p.params || '',
+    path: p.path || '',
+    started: p.started || 0,
+    user: p.user || '',
+    state: p.state || '',
+    tty: p.tty || ''
+  };
+}
+
+let allProcessData = [];
+
 async function collectSystemData() {
   const [cpu, mem, fsSize, networkStats, processes] = await Promise.all([
     si.currentLoad(),
@@ -94,6 +162,8 @@ async function collectSystemData() {
     si.networkStats(),
     si.processes()
   ]);
+
+  allProcessData = processes.list;
 
   const cpuUsage = cpu.currentLoad;
   const memoryUsage = (mem.active / mem.total) * 100;
@@ -124,6 +194,8 @@ async function collectSystemData() {
       memBytes: Math.round(p.memVsz || p.memRss || 0)
     }));
 
+  const processTree = buildProcessTree(processes.list);
+
   return {
     timestamp: new Date().toISOString(),
     cpu: {
@@ -150,7 +222,8 @@ async function collectSystemData() {
       upMB: parseFloat((networkUp / 1024 / 1024).toFixed(2)),
       downMB: parseFloat((networkDown / 1024 / 1024).toFixed(2))
     },
-    topProcesses
+    topProcesses,
+    processTree
   };
 }
 
@@ -388,4 +461,9 @@ ipcMain.on('delete-old-logs', async (event, daysToKeep) => {
 
 ipcMain.on('get-history-data', (event) => {
   event.reply('history-data', []);
+});
+
+ipcMain.on('get-process-detail', (event, pid) => {
+  const detail = getProcessDetail(parseInt(pid), allProcessData);
+  event.reply('process-detail', detail);
 });

@@ -11,6 +11,9 @@ let labels = [];
 let maxDataPoints = 30;
 let currentSort = 'cpu';
 let currentProcesses = [];
+let currentProcessTree = [];
+let expandedNodes = new Set();
+let processSearchKeyword = '';
 let alertCount = 0;
 let historyData = [];
 let historyOffset = 0;
@@ -262,9 +265,20 @@ function bindEvents() {
       document.querySelectorAll('.sort-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
       currentSort = tab.dataset.sort;
-      renderProcesses(currentProcesses);
+      renderProcessTree();
     });
   });
+
+  document.getElementById('processSearch').addEventListener('input', (e) => {
+    processSearchKeyword = e.target.value.toLowerCase();
+    if (processSearchKeyword) {
+      expandMatchingNodes(currentProcessTree, processSearchKeyword);
+    }
+    renderProcessTree();
+  });
+
+  document.getElementById('btnCloseProcessDetail').addEventListener('click', closeProcessDetail);
+  document.getElementById('btnCloseProcessDetail2').addEventListener('click', closeProcessDetail);
 
   document.getElementById('cpuThreshold').addEventListener('input', (e) => {
     document.getElementById('cpuThresholdValue').textContent = e.target.value + '%';
@@ -304,7 +318,12 @@ ipcRenderer.on('system-data', (event, data) => {
   updateStats(data);
   updateCharts(data);
   currentProcesses = data.topProcesses;
-  renderProcesses(currentProcesses);
+  currentProcessTree = data.processTree || [];
+  renderProcessTree();
+});
+
+ipcRenderer.on('process-detail', (event, detail) => {
+  showProcessDetail(detail);
 });
 
 ipcRenderer.on('alerts', (event, alerts) => {
@@ -458,42 +477,293 @@ function updateCharts(data) {
   networkChart.update('none');
 }
 
-function renderProcesses(processes) {
+function renderProcessTree() {
   const processList = document.getElementById('processList');
   
-  if (!processes || processes.length === 0) {
+  if (!currentProcessTree || currentProcessTree.length === 0) {
     processList.innerHTML = '<div class="loading">加载中...</div>';
     return;
   }
 
-  const sorted = [...processes].sort((a, b) => {
-    return currentSort === 'cpu' ? b.cpu - a.cpu : b.mem - a.mem;
+  let displayTree = JSON.parse(JSON.stringify(currentProcessTree));
+  
+  if (processSearchKeyword) {
+    displayTree = filterProcessTree(displayTree, processSearchKeyword);
+  }
+
+  sortProcessTreeRecursive(displayTree, currentSort);
+
+  const html = renderTreeNodes(displayTree, 0, []);
+  
+  processList.innerHTML = html;
+
+  processList.querySelectorAll('.tree-toggle').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const pid = parseInt(btn.dataset.pid);
+      toggleNode(pid);
+    });
   });
 
-  processList.innerHTML = sorted.map((p, index) => {
-    const cpuColor = p.cpu >= 50 ? 'var(--danger-color)' : p.cpu >= 20 ? 'var(--warning-color)' : 'var(--text-primary)';
-    const memColor = p.mem >= 50 ? 'var(--danger-color)' : p.mem >= 20 ? 'var(--warning-color)' : 'var(--text-primary)';
-    
-    return `
-      <div class="process-item">
-        <div class="process-rank">${index + 1}</div>
+  processList.querySelectorAll('.process-tree-item').forEach(item => {
+    item.addEventListener('dblclick', () => {
+      const pid = parseInt(item.dataset.pid);
+      openProcessDetail(pid);
+    });
+  });
+}
+
+function renderTreeNodes(nodes, level, parentLines) {
+  if (!nodes || nodes.length === 0) return '';
+  
+  return nodes.map((node, index) => {
+    const isLast = index === nodes.length - 1;
+    const hasChildren = node.children && node.children.length > 0;
+    const isExpanded = expandedNodes.has(node.pid);
+    const pidStr = String(node.pid);
+
+    let linesHtml = '';
+    for (let i = 0; i < level; i++) {
+      if (parentLines[i]) {
+        linesHtml += '<span class="tree-line tree-line-vertical"></span>';
+      } else {
+        linesHtml += '<span class="tree-line tree-line-empty"></span>';
+      }
+    }
+
+    if (level > 0) {
+      if (isLast) {
+        linesHtml += '<span class="tree-line tree-line-corner">└──</span>';
+      } else {
+        linesHtml += '<span class="tree-line tree-line-branch">├──</span>';
+      }
+    }
+
+    let toggleHtml = '';
+    if (hasChildren) {
+      toggleHtml = `<span class="tree-toggle" data-pid="${pidStr}">${isExpanded ? '▼' : '▶'}</span>`;
+    } else {
+      toggleHtml = '<span class="tree-toggle tree-toggle-leaf">•</span>';
+    }
+
+    const cpuColor = node.cpu >= 50 ? 'var(--danger-color)' : node.cpu >= 20 ? 'var(--warning-color)' : 'var(--text-primary)';
+    const memColor = node.mem >= 50 ? 'var(--danger-color)' : node.mem >= 20 ? 'var(--warning-color)' : 'var(--text-primary)';
+
+    let childrenHtml = '';
+    if (hasChildren && isExpanded) {
+      const newParentLines = [...parentLines, !isLast];
+      childrenHtml = renderTreeNodes(node.children, level + 1, newParentLines);
+    }
+
+    const itemHtml = `
+      <div class="process-tree-item" data-pid="${pidStr}">
+        <div class="tree-indent">
+          ${linesHtml}
+          ${toggleHtml}
+        </div>
         <div class="process-icon">📄</div>
-        <div class="process-name">${escapeHtml(p.name)}
-          <span class="process-pid">PID: ${p.pid}</span>
+        <div class="process-name">${escapeHtml(node.name)}
+          <span class="process-pid">PID: ${node.pid}</span>
         </div>
         <div class="process-stats">
           <div class="process-stat">
             <div class="process-stat-label">CPU</div>
-            <div class="process-stat-value" style="color: ${cpuColor}">${p.cpu.toFixed(1)}%</div>
+            <div class="process-stat-value" style="color: ${cpuColor}">${node.cpu.toFixed(1)}%</div>
           </div>
           <div class="process-stat">
             <div class="process-stat-label">内存</div>
-            <div class="process-stat-value" style="color: ${memColor}">${p.mem.toFixed(1)}%</div>
+            <div class="process-stat-value" style="color: ${memColor}">${node.mem.toFixed(1)}%</div>
           </div>
         </div>
       </div>
+      ${childrenHtml}
     `;
+
+    return itemHtml;
   }).join('');
+}
+
+function sortProcessTreeRecursive(nodes, sortBy) {
+  if (!nodes || nodes.length === 0) return;
+  
+  nodes.sort((a, b) => {
+    return sortBy === 'cpu' ? b.cpu - a.cpu : b.mem - a.mem;
+  });
+  
+  nodes.forEach(node => {
+    if (node.children && node.children.length > 0) {
+      sortProcessTreeRecursive(node.children, sortBy);
+    }
+  });
+}
+
+function filterProcessTree(nodes, keyword) {
+  if (!nodes || nodes.length === 0) return [];
+  
+  const result = [];
+  
+  for (const node of nodes) {
+    const filteredChildren = filterProcessTree(node.children, keyword);
+    const nameMatch = node.name.toLowerCase().includes(keyword);
+    const pidMatch = String(node.pid).includes(keyword);
+    
+    if (nameMatch || pidMatch || filteredChildren.length > 0) {
+      result.push({
+        ...node,
+        children: filteredChildren
+      });
+    }
+  }
+  
+  return result;
+}
+
+function expandMatchingNodes(nodes, keyword) {
+  if (!nodes || nodes.length === 0) return false;
+  
+  let hasMatch = false;
+  
+  for (const node of nodes) {
+    const childHasMatch = expandMatchingNodes(node.children, keyword);
+    const nameMatch = node.name.toLowerCase().includes(keyword);
+    const pidMatch = String(node.pid).includes(keyword);
+    
+    if (nameMatch || pidMatch || childHasMatch) {
+      hasMatch = true;
+      if (childHasMatch) {
+        expandedNodes.add(node.pid);
+      }
+    }
+  }
+  
+  return hasMatch;
+}
+
+function toggleNode(pid) {
+  if (expandedNodes.has(pid)) {
+    expandedNodes.delete(pid);
+  } else {
+    expandedNodes.add(pid);
+  }
+  renderProcessTree();
+}
+
+function openProcessDetail(pid) {
+  document.getElementById('processDetailModal').classList.add('active');
+  document.getElementById('processDetailTitle').textContent = '进程详情';
+  document.getElementById('processDetailBody').innerHTML = '<div class="loading">加载中...</div>';
+  ipcRenderer.send('get-process-detail', pid);
+}
+
+function showProcessDetail(detail) {
+  if (!detail) {
+    document.getElementById('processDetailBody').innerHTML = '<div class="empty-state">未找到该进程</div>';
+    return;
+  }
+
+  document.getElementById('processDetailTitle').textContent = `${detail.name} (PID: ${detail.pid})`;
+  
+  const startTime = detail.started ? new Date(detail.started * 1000).toLocaleString('zh-CN') : '未知';
+  
+  const html = `
+    <div class="detail-section">
+      <h4>基本信息</h4>
+      <div class="detail-grid">
+        <div class="detail-item">
+          <span class="detail-label">进程名称</span>
+          <span class="detail-value">${escapeHtml(detail.name)}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">PID</span>
+          <span class="detail-value">${detail.pid}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">父进程 PID</span>
+          <span class="detail-value">${detail.ppid || 0}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">线程数</span>
+          <span class="detail-value">${detail.threads || 0}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">优先级</span>
+          <span class="detail-value">${detail.priority || 0}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">进程状态</span>
+          <span class="detail-value">${escapeHtml(detail.state || '未知')}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">运行用户</span>
+          <span class="detail-value">${escapeHtml(detail.user || '未知')}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">启动时间</span>
+          <span class="detail-value">${startTime}</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="detail-section">
+      <h4>资源占用</h4>
+      <div class="detail-grid">
+        <div class="detail-item">
+          <span class="detail-label">CPU 使用率</span>
+          <span class="detail-value" style="color: ${detail.cpu >= 50 ? 'var(--danger-color)' : detail.cpu >= 20 ? 'var(--warning-color)' : 'var(--text-primary)'}">${detail.cpu.toFixed(2)}%</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">内存使用率</span>
+          <span class="detail-value" style="color: ${detail.mem >= 50 ? 'var(--danger-color)' : detail.mem >= 20 ? 'var(--warning-color)' : 'var(--text-primary)'}">${detail.mem.toFixed(2)}%</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">物理内存 (RSS)</span>
+          <span class="detail-value">${formatBytes((detail.memRss || 0) * 1024)}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">虚拟内存 (VSZ)</span>
+          <span class="detail-value">${formatBytes((detail.memVsz || 0) * 1024)}</span>
+        </div>
+      </div>
+    </div>
+    
+    <div class="detail-section">
+      <h4>命令行</h4>
+      <div class="detail-item full-width">
+        <span class="detail-label">执行命令</span>
+        <span class="detail-value detail-command">${escapeHtml(detail.command || '未知')}</span>
+      </div>
+      ${detail.params ? `
+      <div class="detail-item full-width">
+        <span class="detail-label">命令参数</span>
+        <span class="detail-value detail-command">${escapeHtml(detail.params)}</span>
+      </div>
+      ` : ''}
+    </div>
+    
+    <div class="detail-section">
+      <h4>其他信息</h4>
+      <div class="detail-grid">
+        <div class="detail-item">
+          <span class="detail-label">用户组</span>
+          <span class="detail-value">${escapeHtml(detail.group || '未知')}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">终端</span>
+          <span class="detail-value">${escapeHtml(detail.tty || '未知')}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Nice 值</span>
+          <span class="detail-value">${detail.nice || 0}</span>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  document.getElementById('processDetailBody').innerHTML = html;
+}
+
+function closeProcessDetail() {
+  document.getElementById('processDetailModal').classList.remove('active');
 }
 
 function addAlert(alert) {
